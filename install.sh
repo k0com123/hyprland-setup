@@ -4,461 +4,478 @@
 #
 #          FILE: install.sh
 #
-#         USAGE: ./install.sh [OPTIONS]
+#         USAGE: ./install.sh [options]
 #
 #   DESCRIPTION: Automated Hyprland + ML4W Dotfiles Installer for Arch Linux
-#                Production-ready, battle-tested, zero-bullshit deployment.
+#                "Rice hard or go home"
 #
 #       OPTIONS: See usage() function below
-#  REQUIREMENTS: Arch Linux (or derivative), sudo access, internet connection
-#          BUGS: Report at: https://github.com/yourusername/hyprland-ml4w-installer
-#         NOTES: Tested on Arch, EndeavourOS, Manjaro
-#        AUTHOR: Your Name
+#  REQUIREMENTS: Arch Linux (or derivative), internet connection, sudo access
+#          BUGS: Report at https://github.com/k0com123/hyprland-setup/issues
+#         NOTES: Tested on Arch, EndeavourOS, Garuda, Manjaro
+#        AUTHOR: k0com123 (https://github.com/k0com123)
 #       VERSION: 2.0.0
 #       CREATED: 2024
 #      REVISION: Hardcore Edition
+#      LICENSE: MIT (see LICENSE file)
+#
 #===============================================================================
 
 #-------------------------------------------------------------------------------
-# CONFIGURATION & STRICT MODE
+# CONFIGURATION & VARIABLES
 #-------------------------------------------------------------------------------
 
-set -euo pipefail
-IFS=$'\n\t'
+set -euo pipefail  # Strict mode: exit on error, undefined var, pipe fail
 
-# Script metadata
-readonly SCRIPT_NAME="Hyprland ML4W Installer"
 readonly SCRIPT_VERSION="2.0.0"
-readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-readonly LOG_FILE="/tmp/hyprland-ml4w-install-$(date +%Y%m%d-%H%M%S).log"
+readonly SCRIPT_NAME="Hyprland ML4W Installer"
+readonly REPO_URL="https://github.com/k0com123/hyprland-setup"
+readonly ISSUES_URL="https://github.com/k0com123/hyprland-setup/issues"
+readonly LOG_FILE="/tmp/hyprland-install-$(date +%Y%m%d-%H%M%S).log"
+readonly BACKUP_DIR="$HOME/.config/backup-$(date +%Y%m%d-%H%M%S)"
 
-# Color codes (only if terminal supports it)
-if [[ -t 1 ]]; then
-    readonly RED='\033[0;31m'
-    readonly GREEN='\033[0;32m'
-    readonly YELLOW='\033[1;33m'
-    readonly BLUE='\033[0;34m'
-    readonly CYAN='\033[0;36m'
-    readonly BOLD='\033[1m'
-    readonly NC='\033[0m'
-else
-    readonly RED=''
-    readonly GREEN=''
-    readonly YELLOW=''
-    readonly BLUE=''
-    readonly CYAN=''
-    readonly BOLD=''
-    readonly NC=''
-fi
+# Colors
+readonly C_RED='\033[0;31m'
+readonly C_GREEN='\033[0;32m'
+readonly C_YELLOW='\033[1;33m'
+readonly C_BLUE='\033[0;34m'
+readonly C_CYAN='\033[0;36m'
+readonly C_MAGENTA='\033[0;35m'
+readonly C_NC='\033[0m'
 
 # Package lists
-readonly HYPRLAND_PACKAGES=(
+readonly PACMAN_PACKAGES=(
     hyprland hyprpaper hyprlock hypridle hyprcursor hyprutils
     xdg-desktop-portal-hyprland
-    waybar wofi kitty mako
-    grimblast wl-clipboard
-    polkit-kde-agent
-    qt5-wayland qt6-wayland
-    pipewire wireplumber pipewire-audio pipewire-pulse
-    pavucontrol network-manager-applet blueman
-    thunar ttf-font-awesome noto-fonts noto-fonts-emoji
-    ttf-jetbrains-mono-nerd
+    waybar wofi kitty mako grimblast wl-clipboard
+    polkit-kde-agent qt5-wayland qt6-wayland
+    pipewire wireplumber pipewire-audio pipewire-pulse pavucontrol
+    network-manager-applet blueman
+    thunar gvfs tumbler
+    ttf-font-awesome noto-fonts noto-fonts-emoji 
+    ttf-jetbrains-mono-nerd ttf-fira-code
+    starship zsh zsh-completions
+    swww
+    wlogout
+    swappy
+    slurp
+    brightnessctl
+    pamixer
 )
 
 readonly AUR_PACKAGES=(
     hyprland-plugins
     waybar-module-pacman-updates
-    swww
-    wlogout
+    wofi-calc
+    sddm-sugar-candy-git
 )
 
-# Flags
-DRY_RUN=false
-SKIP_SYSTEM_UPDATE=false
-SKIP_HYPRLAND=false
-SKIP_AUR=false
-SKIP_ML4W=false
-VERBOSE=false
-
-#-------------------------------------------------------------------------------
-# LOGGING FUNCTIONS
-#-------------------------------------------------------------------------------
-
-log() {
-    local level="$1"
-    shift
-    local message="$*"
-    local timestamp
-    timestamp=$(date '+%Y-%m-%d %H:%M:%S')
-    
-    echo "[$timestamp] [$level] $message" >> "$LOG_FILE"
-    
-    case "$level" in
-        ERROR)   echo -e "${RED}[ERROR]${NC} $message" >&2 ;;
-        WARN)    echo -e "${YELLOW}[WARN]${NC} $message" ;;
-        INFO)    echo -e "${BLUE}[INFO]${NC} $message" ;;
-        SUCCESS) echo -e "${GREEN}[OK]${NC} $message" ;;
-        DEBUG)   [[ "$VERBOSE" == true ]] && echo -e "${CYAN}[DEBUG]${NC} $message" ;;
-    esac
-}
-
-die() {
-    log ERROR "$1"
-    log ERROR "Installation failed. Check log: $LOG_FILE"
-    exit 1
-}
+readonly FLATPAK_PACKAGES=(
+    "com.ml4w.dotfilesinstaller"
+)
 
 #-------------------------------------------------------------------------------
 # UTILITY FUNCTIONS
 #-------------------------------------------------------------------------------
 
-command_exists() {
-    command -v "$1" >/dev/null 2>&1
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"
 }
 
-package_installed() {
-    pacman -Q "$1" >/dev/null 2>&1
+print_error() { echo -e "${C_RED}[ERROR]${C_NC} $*" | tee -a "$LOG_FILE"; }
+print_success() { echo -e "${C_GREEN}[OK]${C_NC} $*"; }
+print_warning() { echo -e "${C_YELLOW}[WARN]${C_NC} $*"; }
+print_info() { echo -e "${C_BLUE}[INFO]${C_NC} $*"; }
+print_header() { echo -e "${C_CYAN}$*${C_NC}"; }
+print_step() { echo -e "\n${C_MAGENTA}[PHASE]${C_NC} ${C_YELLOW}$*${C_NC}"; }
+
+show_banner() {
+    clear
+    echo -e "${C_CYAN}"
+    cat << 'EOF'
+    ╔══════════════════════════════════════════════════════════════════╗
+    ║                                                                  ║
+    ║   ██╗  ██╗██╗   ██╗██████╗ ██████╗ ██╗      █████╗ ███╗   ██╗██████╗  ║
+    ║   ██║  ██║╚██╗ ██╔╝██╔══██╗██╔══██╗██║     ██╔══██╗████╗  ██║██╔══██╗ ║
+    ║   ███████║ ╚████╔╝ ██████╔╝██████╔╝██║     ███████║██╔██╗ ██║██║  ██║ ║
+    ║   ██╔══██║  ╚██╔╝  ██╔═══╝ ██╔══██╗██║     ██╔══██║██║╚██╗██║██║  ██║ ║
+    ║   ██║  ██║   ██║   ██║     ██║  ██║███████╗██║  ██║██║ ╚████║██████╔╝ ║
+    ║   ╚═╝  ╚═╝   ╚═╝   ╚═╝     ╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═══╝╚═════╝  ║
+    ║                                                                  ║
+    ║              ██╗███╗   ██╗███████╗████████╗ █████╗ ██╗     ██╗      ║
+    ║              ██║████╗  ██║██╔════╝╚══██╔══╝██╔══██╗██║     ██║      ║
+    ║              ██║██╔██╗ ██║███████╗   ██║   ███████║██║     ██║      ║
+    ║              ██║██║╚██╗██║╚════██║   ██║   ██╔══██║██║     ██║      ║
+    ║              ██║██║ ╚████║███████║   ██║   ██║  ██║███████╗███████╗ ║
+    ║              ╚═╝╚═╝  ╚═══╝╚══════╝   ╚═╝   ╚═╝  ╚═╝╚══════╝╚══════╝ ║
+    ║                                                                  ║
+    ║                    ML4W DOTFILES EDITION v2.0                    ║
+    ║                                                                  ║
+    ╚══════════════════════════════════════════════════════════════════╝
+EOF
+    echo -e "${C_NC}"
+    echo -e "${C_YELLOW}    GitHub: https://github.com/k0com123/hyprland-setup${C_NC}"
+    echo -e "${C_YELLOW}    Issues: https://github.com/k0com123/hyprland-setup/issues${C_NC}"
+    echo -e "${C_YELLOW}    License: MIT (see LICENSE file)${C_NC}"
+    echo -e "${C_YELLOW}    Logs: $LOG_FILE${C_NC}\n"
 }
 
-is_arch() {
-    [[ -f /etc/arch-release ]] || [[ -f /etc/manjaro-release ]] || [[ -f /etc/endeavouros-release ]]
+usage() {
+    cat << EOF
+Usage: $0 [OPTIONS]
+
+Hyprland + ML4W Dotfiles Installer for Arch Linux
+Repository: https://github.com/k0com123/hyprland-setup
+License: MIT
+
+OPTIONS:
+    -h, --help          Show this help message
+    -v, --verbose       Verbose output (set -x)
+    -n, --no-aur        Skip AUR packages (yay not needed)
+    -f, --force         Force reinstall even if packages exist
+    -b, --backup        Create backup of existing configs (default: true)
+    -s, --skip-update   Skip system update (not recommended)
+    -u, --uninstall     Uninstall everything (DANGEROUS)
+    --dry-run           Show what would be installed without installing
+
+EXAMPLES:
+    $0                  # Standard installation
+    $0 --verbose        # Debug mode with full output
+    $0 --no-aur         # Skip AUR packages (minimal install)
+    $0 --uninstall      # Remove everything (rip rice)
+
+Report bugs at: https://github.com/k0com123/hyprland-setup/issues
+
+EOF
 }
 
-has_sudo() {
-    sudo -n true 2>/dev/null || {
-        log WARN "This script requires sudo privileges"
-        sudo -v || die "Failed to obtain sudo access"
-    }
-}
+command_exists() { command -v "$1" &> /dev/null; }
 
-spinner() {
-    local pid=$1
-    local delay=0.1
-    local spinstr='|/-\'
-    while kill -0 "$pid" 2>/dev/null; do
-        local temp=${spinstr#?}
-        printf " [%c]  " "$spinstr"
-        local spinstr=$temp${spinstr%"$temp"}
-        sleep $delay
-        printf "\b\b\b\b\b\b"
-    done
-    printf "    \b\b\b\b"
-}
-
-run_with_spinner() {
-    local msg="$1"
-    shift
-    echo -n "$msg..."
-    "$@" >/dev/null 2>&1 &
-    local pid=$!
-    spinner $pid
-    wait $pid
-    local exit_code=$?
-    if [[ $exit_code -eq 0 ]]; then
-        echo -e " ${GREEN}DONE${NC}"
-    else
-        echo -e " ${RED}FAILED${NC}"
-        return $exit_code
+check_arch() {
+    if [[ ! -f /etc/arch-release ]]; then
+        print_error "This script is for Arch Linux only."
+        print_error "Detected: $(cat /etc/os-release 2>/dev/null | grep -oP '(?<=^NAME=).*' || echo 'Unknown')"
+        log "ERROR: Not Arch Linux"
+        exit 1
     fi
+    print_success "Arch Linux detected: $(pacman -Qq linux 2>/dev/null || echo 'kernel unknown')"
 }
 
-#-------------------------------------------------------------------------------
-# VALIDATION FUNCTIONS
-#-------------------------------------------------------------------------------
-
-preflight_checks() {
-    log INFO "Running preflight checks..."
-    
-    # Check OS
-    if ! is_arch; then
-        die "This script is for Arch Linux and derivatives only. Detected OS is not supported."
-    fi
-    log SUCCESS "Arch Linux detected"
-    
-    # Check not root
+check_not_root() {
     if [[ $EUID -eq 0 ]]; then
-        die "Do not run this script as root. It will use sudo when needed."
+        print_error "Do not run as root!"
+        print_error "The script uses sudo when needed. Running as root is insecure."
+        log "ERROR: Script run as root"
+        exit 1
     fi
     
-    # Check sudo
-    has_sudo
-    
-    # Check internet
-    if ! ping -c 1 archlinux.org >/dev/null 2>&1; then
-        die "No internet connection detected. Check your network."
-    fi
-    log SUCCESS "Internet connection verified"
-    
-    # Check disk space (need at least 2GB)
-    local available_space
-    available_space=$(df /tmp | awk 'NR==2 {print $4}')
-    if [[ $available_space -lt 2097152 ]]; then
-        die "Insufficient disk space. Need at least 2GB free in /tmp"
+    if ! sudo -n true 2>/dev/null; then
+        print_warning "Sudo access required. Please enter password when prompted."
+        sudo -v || { print_error "Sudo access denied"; exit 1; }
     fi
     
-    log SUCCESS "Preflight checks passed"
+    while true; do sudo -n true; sleep 60; kill -0 "$$" || exit; done 2>/dev/null &
+    
+    print_success "Sudo access confirmed"
 }
 
-#-------------------------------------------------------------------------------
-# INSTALLATION PHASES
-#-------------------------------------------------------------------------------
-
-phase_system_update() {
-    [[ "$SKIP_SYSTEM_UPDATE" == true ]] && { log INFO "Skipping system update"; return 0; }
-    [[ "$DRY_RUN" == true ]] && { log INFO "[DRY-RUN] Would run: pacman -Syu"; return 0; }
+update_system() {
+    print_step "Updating System"
+    print_info "Running pacman -Syu..."
     
-    log INFO "Phase 1/5: System Update"
-    
-    if run_with_spinner "Updating package database" sudo pacman -Sy; then
-        log SUCCESS "Package database updated"
+    if sudo pacman -Syu --noconfirm; then
+        print_success "System updated successfully"
     else
-        die "Failed to update package database"
-    fi
-    
-    # Check if full upgrade is needed
-    local updates_available
-    updates_available=$(pacman -Qu | wc -l)
-    
-    if [[ $updates_available -gt 0 ]]; then
-        log INFO "$updates_available packages can be upgraded"
-        log INFO "Upgrading system packages..."
-        
-        if sudo pacman -Syu --noconfirm; then
-            log SUCCESS "System upgraded successfully"
-        else
-            die "System upgrade failed"
-        fi
-    else
-        log SUCCESS "System is up to date"
+        print_error "System update failed"
+        exit 1
     fi
 }
 
-phase_install_hyprland() {
-    [[ "$SKIP_HYPRLAND" == true ]] && { log INFO "Skipping Hyprland installation"; return 0; }
-    [[ "$DRY_RUN" == true ]] && { log INFO "[DRY-RUN] Would install: ${HYPRLAND_PACKAGES[*]}"; return 0; }
-    
-    log INFO "Phase 2/5: Installing Hyprland Ecosystem"
-    
-    local packages_to_install=()
-    for pkg in "${HYPRLAND_PACKAGES[@]}"; do
-        if ! package_installed "$pkg"; then
-            packages_to_install+=("$pkg")
-        else
-            log DEBUG "$pkg already installed"
-        fi
-    done
-    
-    if [[ ${#packages_to_install[@]} -eq 0 ]]; then
-        log SUCCESS "All Hyprland packages already installed"
+install_yay() {
+    if [[ "${SKIP_AUR:-false}" == true ]]; then
+        print_info "Skipping AUR (yay) installation as requested"
         return 0
     fi
-    
-    log INFO "Installing ${#packages_to_install[@]} packages..."
-    
-    if sudo pacman -S --needed --noconfirm "${packages_to_install[@]}"; then
-        log SUCCESS "Hyprland ecosystem installed"
-    else
-        die "Failed to install Hyprland packages"
-    fi
-    
-    # Enable services
-    log INFO "Enabling PipeWire services..."
-    systemctl --user enable pipewire pipewire-pulse 2>/dev/null || true
-}
-
-phase_install_aur_helper() {
-    [[ "$SKIP_AUR" == true ]] && { log INFO "Skipping AUR setup"; return 0; }
-    [[ "$DRY_RUN" == true ]] && { log INFO "[DRY-RUN] Would install yay"; return 0; }
-    
-    log INFO "Phase 3/5: AUR Helper Setup"
     
     if command_exists yay; then
-        log SUCCESS "yay already installed"
+        print_success "yay already installed: $(yay --version | head -n1)"
         return 0
     fi
     
-    if command_exists paru; then
-        log SUCCESS "paru found, using existing AUR helper"
-        return 0
-    fi
+    print_step "Installing yay (AUR Helper)"
     
-    log INFO "Installing yay-bin..."
+    sudo pacman -S --needed --noconfirm git base-devel || {
+        print_error "Failed to install build dependencies"
+        exit 1
+    }
     
-    # Install dependencies
-    sudo pacman -S --needed --noconfirm git base-devel || die "Failed to install build dependencies"
+    local yay_dir="/tmp/yay-build-$$"
+    mkdir -p "$yay_dir"
+    cd "$yay_dir"
     
-    # Build yay
-    local build_dir
-    build_dir=$(mktemp -d)
-    cd "$build_dir" || die "Failed to create build directory"
+    git clone https://aur.archlinux.org/yay-bin.git . || {
+        print_error "Failed to clone yay repository"
+        exit 1
+    }
     
-    if git clone https://aur.archlinux.org/yay-bin.git; then
-        cd yay-bin || die "Failed to enter yay directory"
-        if makepkg -si --noconfirm; then
-            log SUCCESS "yay installed successfully"
-        else
-            die "Failed to build yay"
-        fi
-    else
-        die "Failed to clone yay repository"
-    fi
+    makepkg -si --noconfirm || {
+        print_error "Failed to build yay"
+        exit 1
+    }
     
-    cd "$SCRIPT_DIR" || true
-    rm -rf "$build_dir"
+    cd - > /dev/null
+    rm -rf "$yay_dir"
+    
+    print_success "yay installed successfully"
 }
 
-phase_install_aur_packages() {
-    [[ "$SKIP_AUR" == true ]] && { log INFO "Skipping AUR packages"; return 0; }
-    [[ "$DRY_RUN" == true ]] && { log INFO "[DRY-RUN] Would install AUR packages"; return 0; }
+backup_configs() {
+    [[ "${DO_BACKUP:-true}" != true ]] && return 0
     
-    log INFO "Installing additional AUR packages..."
+    print_step "Creating Backup"
+    print_info "Backup directory: $BACKUP_DIR"
     
-    local aur_helper="yay"
-    command_exists yay || aur_helper="paru"
-    command_exists paru || die "No AUR helper found"
+    mkdir -p "$BACKUP_DIR"
     
-    local aur_to_install=()
-    for pkg in "${AUR_PACKAGES[@]}"; do
-        if ! package_installed "$pkg" 2>/dev/null; then
-            aur_to_install+=("$pkg")
+    local configs=(hypr waybar wofi kitty mako)
+    local backed_up=false
+    
+    for config in "${configs[@]}"; do
+        local config_path="$HOME/.config/$config"
+        if [[ -d "$config_path" ]]; then
+            print_info "Backing up $config..."
+            cp -r "$config_path" "$BACKUP_DIR/" || print_warning "Failed to backup $config"
+            backed_up=true
         fi
     done
     
-    if [[ ${#aur_to_install[@]} -gt 0 ]]; then
-        log INFO "Installing from AUR: ${aur_to_install[*]}"
-        if $aur_helper -S --needed --noconfirm "${aur_to_install[@]}"; then
-            log SUCCESS "AUR packages installed"
-        else
-            log WARN "Some AUR packages failed to install (non-critical)"
-        fi
+    if [[ "$backed_up" == true ]]; then
+        print_success "Configs backed up to $BACKUP_DIR"
     else
-        log SUCCESS "All AUR packages already installed"
+        print_info "No existing configs to backup"
     fi
 }
 
-phase_install_flatpak() {
-    [[ "$DRY_RUN" == true ]] && { log INFO "[DRY-RUN] Would setup Flatpak"; return 0; }
+install_pacman_packages() {
+    print_step "Installing Core Packages ($((${#PACMAN_PACKAGES[@]})) packages)"
     
-    log INFO "Phase 4/5: Flatpak Setup"
+    local to_install=()
+    for pkg in "${PACMAN_PACKAGES[@]}"; do
+        if ! pacman -Qq "$pkg" &> /dev/null || [[ "${FORCE_REINSTALL:-false}" == true ]]; then
+            to_install+=("$pkg")
+        else
+            [[ "${VERBOSE:-false}" == true ]] && print_info "$pkg already installed"
+        fi
+    done
     
-    if ! command_exists flatpak; then
-        log INFO "Installing Flatpak..."
-        sudo pacman -S --needed --noconfirm flatpak || die "Failed to install Flatpak"
-    fi
-    
-    # Add flathub
-    if ! flatpak remotes | grep -q flathub; then
-        log INFO "Adding Flathub repository..."
-        sudo flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo || \
-            die "Failed to add Flathub"
-    fi
-    
-    log SUCCESS "Flatpak ready"
-}
-
-phase_install_ml4w() {
-    [[ "$SKIP_ML4W" == true ]] && { log INFO "Skipping ML4W installation"; return 0; }
-    [[ "$DRY_RUN" == true ]] && { log INFO "[DRY-RUN] Would install com.ml4w.dotfilesinstaller"; return 0; }
-    
-    log INFO "Phase 5/5: ML4W Dotfiles Installer"
-    
-    # Check if already installed
-    if flatpak list | grep -q "com.ml4w.dotfilesinstaller"; then
-        log SUCCESS "ML4W Dotfiles Installer already installed"
-        log INFO "Run: flatpak run com.ml4w.dotfilesinstaller"
+    if [[ ${#to_install[@]} -eq 0 ]]; then
+        print_success "All core packages already installed"
         return 0
     fi
     
-    log INFO "Installing ML4W Dotfiles Installer from Flathub..."
+    print_info "Installing: ${to_install[*]}"
     
-    if flatpak install -y flathub com.ml4w.dotfilesinstaller; then
-        log SUCCESS "ML4W Dotfiles Installer installed successfully"
+    if sudo pacman -S --needed --noconfirm "${to_install[@]}"; then
+        print_success "Installed ${#to_install[@]} packages"
     else
-        die "Failed to install ML4W Dotfiles Installer"
+        print_error "Failed to install some packages"
+        print_warning "Continuing anyway..."
     fi
 }
 
-#-------------------------------------------------------------------------------
-# POST-INSTALLATION
-#-------------------------------------------------------------------------------
+install_aur_packages() {
+    [[ "${SKIP_AUR:-false}" == true ]] && return 0
+    
+    print_step "Installing AUR Packages ($((${#AUR_PACKAGES[@]})) packages)"
+    
+    if ! command_exists yay; then
+        print_error "yay not found, skipping AUR packages"
+        print_warning "Install yay manually or run without --no-aur flag"
+        return 1
+    fi
+    
+    local to_install=()
+    for pkg in "${AUR_PACKAGES[@]}"; do
+        if ! yay -Qq "$pkg" &> /dev/null || [[ "${FORCE_REINSTALL:-false}" == true ]]; then
+            to_install+=("$pkg")
+        else
+            [[ "${VERBOSE:-false}" == true ]] && print_info "$pkg already installed"
+        fi
+    done
+    
+    if [[ ${#to_install[@]} -eq 0 ]]; then
+        print_success "All AUR packages already installed"
+        return 0
+    fi
+    
+    print_info "Installing from AUR: ${to_install[*]}"
+    
+    if yay -S --needed --noconfirm "${to_install[@]}"; then
+        print_success "Installed ${#to_install[@]} AUR packages"
+    else
+        print_warning "Some AUR packages failed to install"
+        print_info "You can install them manually later"
+    fi
+}
+
+setup_flatpak() {
+    print_step "Setting up Flatpak"
+    
+    if ! command_exists flatpak; then
+        print_info "Installing Flatpak..."
+        sudo pacman -S --needed --noconfirm flatpak || {
+            print_error "Failed to install Flatpak"
+            exit 1
+        }
+    fi
+    
+    if ! flatpak remotes | grep -q flathub; then
+        print_info "Adding Flathub repository..."
+        sudo flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+    fi
+    
+    print_success "Flatpak configured"
+}
+
+install_ml4w() {
+    print_step "Installing ML4W Dotfiles Installer"
+    
+    if flatpak list | grep -q "com.ml4w.dotfilesinstaller"; then
+        if [[ "${FORCE_REINSTALL:-false}" != true ]]; then
+            print_success "ML4W Dotfiles Installer already installed"
+            return 0
+        fi
+        print_info "Force reinstall requested..."
+    fi
+    
+    print_info "Installing com.ml4w.dotfilesinstaller from Flathub..."
+    
+    if flatpak install -y flathub com.ml4w.dotfilesinstaller; then
+        print_success "ML4W Dotfiles Installer installed successfully"
+    else
+        print_error "Failed to install ML4W Dotfiles Installer"
+        print_info "You can try manually: flatpak install flathub com.ml4w.dotfilesinstaller"
+        exit 1
+    fi
+}
 
 post_install() {
-    echo ""
-    echo -e "${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║${NC}           ${BOLD}INSTALLATION COMPLETE${NC}                            ${CYAN}║${NC}"
-    echo -e "${CYAN}╚════════════════════════════════════════════════════════════╝${NC}"
-    echo ""
+    print_step "Post-Installation Setup"
     
-    # System info
-    echo -e "${BOLD}Installed Components:${NC}"
-    echo "  ✓ Hyprland Wayland Compositor"
-    echo "  ✓ Waybar (status bar)"
-    echo "  ✓ Wofi (application launcher)"
-    echo "  ✓ Kitty (terminal emulator)"
-    echo "  ✓ PipeWire (audio system)"
-    echo "  ✓ ML4W Dotfiles Installer"
-    echo ""
+    if ! groups "$USER" | grep -q video; then
+        print_info "Adding user to 'video' group..."
+        sudo usermod -aG video "$USER"
+        print_warning "You may need to logout/login for video group changes to take effect"
+    fi
     
-    # Next steps
-    echo -e "${BOLD}Next Steps:${NC}"
-    echo "  1. Run ML4W installer:"
-    echo -e "     ${CYAN}flatpak run com.ml4w.dotfilesinstaller${NC}"
-    echo ""
-    echo "  2. Or use the GUI version:"
-    echo -e "     ${CYAN}flatpak run com.ml4w.dotfilesinstaller --gui${NC}"
-    echo ""
-    echo "  3. Add user to video group (if not done):"
-    echo -e "     ${CYAN}sudo usermod -aG video \$USER${NC}"
-    echo ""
-    echo "  4. Reboot and select Hyprland at login"
-    echo ""
+    print_info "Enabling PipeWire services..."
+    systemctl --user enable pipewire pipewire-pulse wireplumber 2>/dev/null || true
     
-    # Log location
-    echo -e "${BOLD}Installation log:${NC} $LOG_FILE"
-    echo ""
+    print_info "Creating XDG directories..."
+    xdg-user-dirs-update 2>/dev/null || true
     
-    # Warning
-    echo -e "${YELLOW}Note:${NC} Some changes require logout/reboot to take effect."
+    print_success "Post-installation complete"
+}
+
+uninstall_all() {
+    print_step "UNINSTALL MODE - DANGER ZONE"
+    print_error "This will remove Hyprland and all related packages!"
+    
+    read -rp "Are you sure? Type 'yes' to continue: " confirm
+    if [[ "$confirm" != "yes" ]]; then
+        print_info "Uninstall cancelled"
+        exit 0
+    fi
+    
+    print_warning "Removing packages..."
+    
+    sudo pacman -Rns --noconfirm "${PACMAN_PACKAGES[@]}" 2>/dev/null || true
+    
+    if command_exists yay; then
+        sudo pacman -Rns --noconfirm yay-bin 2>/dev/null || true
+    fi
+    
+    flatpak uninstall -y com.ml4w.dotfilesinstaller 2>/dev/null || true
+    
+    print_success "Uninstall complete (config files preserved in ~/.config)"
+    print_info "Report issues at: https://github.com/k0com123/hyprland-setup/issues"
+}
+
+dry_run() {
+    print_step "DRY RUN MODE - Nothing will be installed"
+    
+    echo -e "\n${C_CYAN}Pacman packages to install:${C_NC}"
+    for pkg in "${PACMAN_PACKAGES[@]}"; do
+        if ! pacman -Qq "$pkg" &> /dev/null; then
+            echo "  [ ] $pkg"
+        else
+            echo -e "  ${C_GREEN}[✓]${C_NC} $pkg (installed)"
+        fi
+    done
+    
+    echo -e "\n${C_CYAN}AUR packages to install:${C_NC}"
+    for pkg in "${AUR_PACKAGES[@]}"; do
+        echo "  [ ] $pkg"
+    done
+    
+    echo -e "\n${C_CYAN}Flatpak packages to install:${C_NC}"
+    for pkg in "${FLATPAK_PACKAGES[@]}"; do
+        echo "  [ ] $pkg"
+    done
+    
+    echo -e "\n${C_YELLOW}Repository: $REPO_URL${C_NC}"
+    echo -e "${C_YELLOW}Run without --dry-run to install${C_NC}"
+}
+
+show_summary() {
+    echo -e "\n${C_CYAN}╔════════════════════════════════════════════════════════════════╗${C_NC}"
+    echo -e "${C_GREEN}║                  INSTALLATION COMPLETE! 🎉                     ║${C_NC}"
+    echo -e "${C_CYAN}╚════════════════════════════════════════════════════════════════╝${C_NC}"
+    echo ""
+    echo -e "${C_YELLOW}Installed Components:${C_NC}"
+    echo -e "  ${C_GREEN}✓${C_NC} Hyprland Wayland Compositor"
+    echo -e "  ${C_GREEN}✓${C_NC} Waybar (status bar)"
+    echo -e "  ${C_GREEN}✓${C_NC} Wofi (application launcher)"
+    echo -e "  ${C_GREEN}✓${C_NC} Kitty (terminal emulator)"
+    echo -e "  ${C_GREEN}✓${C_NC} ML4W Dotfiles Installer"
+    echo ""
+    echo -e "${C_YELLOW}Next Steps:${C_NC}"
+    echo -e "  1. ${C_CYAN}Reboot your system${C_NC} (recommended for group changes)"
+    echo -e "  2. At login, select ${C_CYAN}Hyprland${C_NC} from your display manager"
+    echo -e "  3. Or run: ${C_CYAN}Hyprland${C_NC} from TTY (Ctrl+Alt+F3)"
+    echo -e "  4. Run ML4W installer: ${C_CYAN}flatpak run com.ml4w.dotfilesinstaller${C_NC}"
+    echo ""
+    echo -e "${C_YELLOW}Useful Commands:${C_NC}"
+    echo -e "  ${C_CYAN}Super + Q${C_NC}          Open terminal"
+    echo -e "  ${C_CYAN}Super + M${C_NC}          Open launcher"
+    echo -e "  ${C_CYAN}Super + Shift + E${C_NC}  Exit Hyprland"
+    echo ""
+    echo -e "${C_MAGENTA}Logs saved to: ${C_NC}$LOG_FILE"
+    echo -e "${C_MAGENTA}Configs backed up to: ${C_NC}$BACKUP_DIR"
+    echo ""
+    echo -e "${C_GREEN}Star the repo: ${C_CYAN}$REPO_URL${C_NC}"
+    echo -e "${C_GREEN}Report bugs: ${C_CYAN}$ISSUES_URL${C_NC}"
+    echo ""
+    echo -e "${C_GREEN}Happy Ricing! 🍚${C_NC}"
 }
 
 cleanup() {
     local exit_code=$?
     if [[ $exit_code -ne 0 ]]; then
-        log ERROR "Script terminated with errors (exit code: $exit_code)"
-        log ERROR "Check the log file: $LOG_FILE"
+        echo -e "\n${C_RED}[FAILED]${C_NC} Installation failed with exit code $exit_code"
+        echo -e "${C_YELLOW}Check logs: $LOG_FILE${C_NC}"
+        echo -e "${C_YELLOW}Report at: $ISSUES_URL${C_NC}"
     fi
+    exit $exit_code
 }
 
+trap cleanup EXIT
+
 #-------------------------------------------------------------------------------
-# CLI INTERFACE
+# MAIN FUNCTION
 #-------------------------------------------------------------------------------
 
-usage() {
-    cat << EOF
-Usage: $(basename "$0") [OPTIONS]
-
-${SCRIPT_NAME} v${SCRIPT_VERSION}
-
-OPTIONS:
-    -h, --help              Show this help message
-    -v, --verbose           Enable verbose output
-    -d, --dry-run           Show what would be done without executing
-    --skip-update           Skip system update
-    --skip-hyprland         Skip Hyprland packages installation
-    --skip-aur              Skip AUR helper and packages
-    --skip-ml4w             Skip ML4W Dotfiles Installer
-    --version               Show version information
-
-EXAMPLES:
-    $(basename "$0")                    # Full installation
-    $(basename "$0") --dry-run          # Preview changes
-    $(basename "$0") --skip-update      # Skip pacman -Syu
-    $(basename "$0") --verbose          # Debug output
-
-EOF
-}
-
-parse_args() {
+main() {
     while [[ $# -gt 0 ]]; do
         case $1 in
             -h|--help)
@@ -467,81 +484,56 @@ parse_args() {
                 ;;
             -v|--verbose)
                 VERBOSE=true
+                set -x
                 shift
                 ;;
-            -d|--dry-run)
-                DRY_RUN=true
-                shift
-                ;;
-            --skip-update)
-                SKIP_SYSTEM_UPDATE=true
-                shift
-                ;;
-            --skip-hyprland)
-                SKIP_HYPRLAND=true
-                shift
-                ;;
-            --skip-aur)
+            -n|--no-aur)
                 SKIP_AUR=true
                 shift
                 ;;
-            --skip-ml4w)
-                SKIP_ML4W=true
+            -f|--force)
+                FORCE_REINSTALL=true
                 shift
                 ;;
-            --version)
-                echo "${SCRIPT_NAME} v${SCRIPT_VERSION}"
+            -b|--backup)
+                DO_BACKUP=true
+                shift
+                ;;
+            -s|--skip-update)
+                SKIP_UPDATE=true
+                shift
+                ;;
+            -u|--uninstall)
+                uninstall_all
+                exit 0
+                ;;
+            --dry-run)
+                dry_run
                 exit 0
                 ;;
             *)
-                log ERROR "Unknown option: $1"
+                print_error "Unknown option: $1"
                 usage
                 exit 1
                 ;;
         esac
     done
-}
-
-#-------------------------------------------------------------------------------
-# MAIN
-#-------------------------------------------------------------------------------
-
-main() {
-    # Setup logging
-    exec 1> >(tee -a "$LOG_FILE")
-    exec 2> >(tee -a "$LOG_FILE" >&2)
     
-    trap cleanup EXIT
+    show_banner
+    check_arch
+    check_not_root
     
-    parse_args "$@"
+    [[ "${SKIP_UPDATE:-false}" != true ]] && update_system
     
-    # Header
-    echo -e "${CYAN}"
-    cat << "EOF"
- _   _ _   _ ____  ____  _      _____ ____  
-| | | | | | |  _ \|  _ \| |    |_   _|  _ \ 
-| |_| | | | | |_) | |_) | |      | | | |_) |
-|  _  | |_| |  _ <|  _ <| |___   | | |  _ < 
-|_| |_|\___/|_| \_\_| \_\_____|  |_| |_| \_\
-                                            
-EOF
-    echo -e "${NC}"
-    echo -e "${BOLD}${SCRIPT_NAME} v${SCRIPT_VERSION}${NC}"
-    echo -e "Log file: ${LOG_FILE}"
-    echo ""
-    
-    # Run phases
-    preflight_checks
-    phase_system_update
-    phase_install_hyprland
-    phase_install_aur_helper
-    phase_install_aur_packages
-    phase_install_flatpak
-    phase_install_ml4w
+    backup_configs
+    install_yay
+    install_pacman_packages
+    install_aur_packages
+    setup_flatpak
+    install_ml4w
     post_install
     
-    log SUCCESS "All phases completed successfully"
+    show_summary
 }
 
 main "$@"
-
