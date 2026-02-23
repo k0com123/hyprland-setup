@@ -142,7 +142,7 @@ EXAMPLES:
     $0                  # Standard installation
     $0 --verbose        # Debug mode with full output
     $0 --no-aur         # Skip AUR packages (minimal install)
-    $0 --uninstall      # Remove everything (rip rice)
+    $0 --uninstall      # Remove installed components
 
 Report bugs at: https://github.com/k0com123/hyprland-setup/issues
 
@@ -154,7 +154,11 @@ command_exists() { command -v "$1" &> /dev/null; }
 check_arch() {
     if [[ ! -f /etc/arch-release ]]; then
         print_error "This script is for Arch Linux only."
-        print_error "Detected: $(cat /etc/os-release 2>/dev/null | grep -oP '(?<=^NAME=).*' || echo 'Unknown')"
+        local os_name="Unknown"
+        if [[ -f /etc/os-release ]]; then
+            os_name="$(awk -F= '/^NAME=/{gsub(/"/, "", $2); print $2; exit}' /etc/os-release)"
+        fi
+        print_error "Detected: $os_name"
         log "ERROR: Not Arch Linux"
         exit 1
     fi
@@ -378,7 +382,7 @@ post_install() {
 }
 
 uninstall_all() {
-    print_step "UNINSTALL MODE - DANGER ZONE"
+    print_step "Uninstall Mode"
     print_error "This will remove Hyprland and all related packages!"
     
     read -rp "Are you sure? Type 'yes' to continue: " confirm
@@ -429,7 +433,7 @@ dry_run() {
 
 show_summary() {
     echo -e "\n${C_CYAN}╔════════════════════════════════════════════════════════════════╗${C_NC}"
-    echo -e "${C_GREEN}║                  INSTALLATION COMPLETE! 🎉                     ║${C_NC}"
+    echo -e "${C_GREEN}║                  INSTALLATION COMPLETE                         ║${C_NC}"
     echo -e "${C_CYAN}╚════════════════════════════════════════════════════════════════╝${C_NC}"
     echo ""
     echo -e "${C_YELLOW}Installed Components:${C_NC}"
@@ -453,10 +457,10 @@ show_summary() {
     echo -e "${C_MAGENTA}Logs saved to: ${C_NC}$LOG_FILE"
     echo -e "${C_MAGENTA}Configs backed up to: ${C_NC}$BACKUP_DIR"
     echo ""
-    echo -e "${C_GREEN}Star the repo: ${C_CYAN}$REPO_URL${C_NC}"
-    echo -e "${C_GREEN}Report bugs: ${C_CYAN}$ISSUES_URL${C_NC}"
+    echo -e "${C_GREEN}Repository: ${C_CYAN}$REPO_URL${C_NC}"
+    echo -e "${C_GREEN}Report issues: ${C_CYAN}$ISSUES_URL${C_NC}"
     echo ""
-    echo -e "${C_GREEN}Happy Ricing! 🍚${C_NC}"
+    echo -e "${C_GREEN}Installation finished successfully.${C_NC}"
 }
 
 cleanup() {
